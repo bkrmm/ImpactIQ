@@ -16,59 +16,88 @@ st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
 
 @st.cache_resource
 def train_model():
-    st.info("Loading & training model on sample...")
-    data = pd.read_csv(r"B:\Updated-VenV\hackathon-synapses2025\criteo-uplift-v2.1.csv.gz", compression="gzip")
+    try:
+        st.info("Loading & training model on sample...")
+        data = pd.read_csv(r"B:\Updated-VenV\hackathon-synapses2025\criteo-uplift-v2.1.csv.gz", compression="gzip")
+        
+        # Drop columns
+        data = data.drop(columns=["visit"], errors="ignore")
 
-    # Drop columns
-    data = data.drop(columns=["visit"], errors="ignore")
+        # Drop missing rows (or fillna if you prefer)
+        data = data.dropna()
 
-    # Drop missing rows (or fillna if you prefer)
-    data = data.dropna()
+        # Limit size for speed
+        #data = data.sample(n=1000000, random_state=42)
 
-    # Limit size for speed
-    #data = data.sample(n=1000000, random_state=42)
+        # Split features and label
+        y = data["conversion"]
+        X = data.drop(columns=["conversion"])
 
-    # Split features and label
-    y = data["conversion"]
-    X = data.drop(columns=["conversion"])
+        # Scale features
+        scaler = StandardScaler()
+        X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
 
-    # Scale features
-    scaler = StandardScaler()
-    X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+        # Split
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, stratify=y, random_state=42)
 
-    # Split
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, stratify=y, random_state=42)
+        # Initialize all return values with proper error handling
+        model = None
+        explainer = None
+        feature_names = []
+        feature_ranges = {}
 
-    # Train model with class weights to target lower probabilities
-    class_weights = {0: 1, 1: 0.1}  # Reduce weight of positive class
-    model = xgb.XGBClassifier(
-        use_label_encoder=False, 
-        eval_metric="logloss",
-        scale_pos_weight=0.1  # Additional downweighting of positive class
-    )
-    model.fit(X_train, y_train)
+        # Process data
+        if not data.empty:
+            # Train model with safeguards
+            model = xgb.XGBClassifier(
+                use_label_encoder=False, 
+                eval_metric="logloss",
+                scale_pos_weight=0.1
+            )
+            model.fit(X_train, y_train)
+            
+            # Create explainer safely
+            try:
+                explainer = shap.TreeExplainer(model, data=X_train.sample(min(1000, len(X_train)), random_state=1))
+            except Exception as e:
+                st.warning(f"SHAP explainer creation failed: {str(e)}")
+                explainer = None
+            
+            # Get feature names
+            feature_names = X.columns.tolist()
+            
+            # Calculate feature ranges safely
+            for col in X.columns:
+                try:
+                    min_val = float(X[col].min())
+                    max_val = float(X[col].max())
+                    if min_val == max_val:
+                        min_val -= 1
+                        max_val += 1
+                    feature_ranges[col] = (min_val, max_val)
+                except Exception as e:
+                    feature_ranges[col] = (-1, 1)  # fallback range
+            
+            # Calculate AUC
+            if model is not None:
+                auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
+                st.success(f"✅ Model trained. Test AUC = {auc:.4f}")
+        
+        return model, scaler, explainer, feature_names, feature_ranges
+    
+    except Exception as e:
+        st.error(f"Error in model training: {str(e)}")
+        return None, StandardScaler(), None, [], {}
 
-    # SHAP explainer
-    explainer = shap.TreeExplainer(model, data=X_train.sample(1000, random_state=1))
-
-    # Calculate feature ranges with safety checks
-    feature_ranges = {}
-    for col in X.columns:
-        min_val = float(X[col].min())
-        max_val = float(X[col].max())
-        # Ensure valid range
-        if min_val == max_val:
-            min_val -= 1
-            max_val += 1
-        feature_ranges[col] = (min_val, max_val)
-
-    # AUC
-    auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
-    st.success(f"✅ Model trained. Test AUC = {auc:.4f}")
-
-    return model, scaler, explainer, X.columns.tolist(), feature_ranges
-
-model, scaler, explainer, feature_names, feature_ranges = train_model()
+# Add error handling for unpacking
+try:
+    model, scaler, explainer, feature_names, feature_ranges = train_model()
+    if model is None:
+        st.error("Model training failed. Please check your data and try again.")
+        st.stop()
+except ValueError as e:
+    st.error(f"Error unpacking model components: {str(e)}")
+    st.stop()
 
 # -------------------------------
 # User Input for Attribution
