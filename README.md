@@ -1,6 +1,7 @@
 # ImpactIQ - Uplift Attribution Engine 
 Made In Synapses 2025 Hackathon by IIT Roorkee
 ~*Measuring True Market Impact: Quantifying the Causal Uplift of Interventions.*
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Problem Statement
