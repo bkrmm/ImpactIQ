@@ -1,9 +1,6 @@
 # ImpactIQ - Uplift Attribution Engine
-
+                                    ~*Measuring True Market Impact: Quantifying the Causal Uplift of Interventions.*
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-## Tagline
-*Measuring True Market Impact: Quantifying the Causal Uplift of Interventions.*
 
 ## Problem Statement
 Businesses invest heavily in marketing campaigns, website features, and user experience improvements, but struggle to isolate the *true causal impact* of these interventions on conversion rates or other key metrics. Standard correlation-based attribution models often misattribute conversions, leading to inefficient resource allocation. It's challenging to determine if a user converted *because* of a specific touchpoint (true uplift) or if they would have converted anyway. ImpactIQ tackles this by employing causal inference techniques to measure the incremental impact (uplift) of specific treatments (e.g., ad exposure, feature usage) on individual user behavior, specifically focusing on purchase decisions within complex user journeys.
@@ -21,7 +18,6 @@ ImpactIQ leverages uplift modeling, a branch of causal inference, to estimate th
 5.  **Simulation & Deployment:** Provides a Streamlit-based simulator for exploring "what-if" scenarios and demonstrating model predictions. The architecture is designed conceptually for near real-time application using a Kafka stream for data ingestion and a model serving component.
 
 ## Technical Details
-
 * **Dataset:** Primarily developed using the [Criteo Uplift Prediction Dataset](https://ailab.criteo.com/criteo-uplift-prediction-dataset/). This dataset contains user features, a binary treatment indicator, and binary outcome indicators (visit and conversion), making it ideal for uplift modeling benchmarking.
 * **Modeling Core:** EconML's `CausalForestDML` or other DML estimators (`LinearDML`, `NonParamDML`) are often employed, leveraging `XGBoost` or `LightGBM` as the underlying machine learning models for estimating the conditional outcome E\[Y|X, W] and treatment propensity E\[T|X, W]. This approach helps control for confounding variables (W) when estimating the effect of treatment (T) on outcome (Y) given features (X).
 * **Evaluation Metrics:**
@@ -49,7 +45,6 @@ ImpactIQ leverages uplift modeling, a branch of causal inference, to estimate th
 * **Visualization:** `Matplotlib`, `Seaborn`
 
 ## Getting Started
-
 **Prerequisites:**
 * Python (>= 3.8)
 * Miniconda/Anaconda (Recommended for managing environments)
@@ -73,7 +68,6 @@ ImpactIQ leverages uplift modeling, a branch of causal inference, to estimate th
     *(Note: Ensure `requirements.txt` includes all necessary packages: pandas, numpy, scikit-learn, econml, xgboost, matplotlib, seaborn, streamlit, kafka-python, etc.)*
 
 ## Usage
-
 1.  **Prepare Data:** Ensure the Criteo dataset (or your own data formatted similarly) is available and accessible by the scripts (e.g., in a `data/` directory). Update configuration files if necessary to point to the data location.
 2.  **Train Model (Example):**
     ```bash
