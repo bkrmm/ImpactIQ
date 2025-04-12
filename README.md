@@ -1,4 +1,5 @@
 # ImpactIQ - Uplift Attribution Engine 
+Made In Synapses 2025 Hackathon by IIT Roorkee
 ~*Measuring True Market Impact: Quantifying the Causal Uplift of Interventions.*
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -28,64 +29,150 @@ ImpactIQ leverages uplift modeling, a branch of causal inference, to estimate th
 [User Interaction Data Stream (e.g., Website Clicks, Ad Views)] ->[Kafka Topic: Raw Events] ->[Python Processing Service (Consumer)] ->[Feature Engineering & Preprocessing] ->[EconML/XGBoost Uplift Model (Inference)] ->[Output: Uplift Scores per User/Interaction] ->[Streamlit Dashboard / API Endpoint (Results & Simulation)][Database/Data Store (Logging Scores)]* **Ingestion:** Kafka handles high-volume event streams.
 * **Processing:** Python service consumes events, performs feature lookups/generation, and applies the trained uplift model.
 * **Serving/Visualization:** Model predictions are served via an API or visualized directly in a Streamlit application for analysis and simulation.
+Got it! Below is the content rewritten in a Notion-friendly **Markdown format**, using clean formatting, indentation, and spacing that aligns with how Notion renders markdown (headings, bold, inline math, code blocks, and bullet points). It's ready to copy and paste into a Notion page or markdown file.
 
-## Challenges Encountered
-* **Data Scale & Specificity:** Processing the large Criteo dataset efficiently; correctly handling the `treatment` and `conversion`/`visit` flags crucial for uplift modeling.
-* **Uplift Modeling Complexity:** Tuning meta-learners or DML models requires careful cross-validation strategies specific to causal inference (e.g., ensuring treatment/control splits are respected). Interpreting uplift metrics (Qini/AUUC) differs significantly from standard classification evaluation.
-* **Feature Engineering for Causality:** Identifying features that are pre-treatment confounders versus post-treatment mediators is critical. Ensuring features don't introduce bias and are robust for causal claims.
-* **Near Real-Time Simulation:** Building a responsive Streamlit app that simulates the pipeline (data input -> feature processing -> model prediction -> result display) required efficient data handling and model loading within the app's lifecycle. The focus remained on a proof-of-concept simulation rather than a fully operational real-time system.
-* **(Bonus) Simulator UI:** Designing an intuitive interface in Streamlit for users to input hypothetical user features/treatments and observe the predicted uplift score.
+---
 
-## Tech Stack
-* **Core:** Python 3.8+
-* **Causal ML / ML:** `EconML`, `XGBoost`, `scikit-learn`
-* **Data Handling:** `pandas`, `numpy`
-* **Streaming (Conceptual):** `kafka-python` (or similar)
-* **Web UI / Simulation:** `Streamlit`
-* **Visualization:** `Matplotlib`, `Seaborn`
+# 📊 ImpactIQ – Uplift Modeling and Attribution Engine
 
-## Getting Started
-**Prerequisites:**
-* Python (>= 3.8)
-* Miniconda/Anaconda (Recommended for managing environments)
-* Git
+**ImpactIQ** is an uplift modeling engine designed to quantify the *incremental* impact of a treatment (e.g. marketing campaign, promotion) by comparing outcomes between a **treatment group** and a **control group**.
 
-**Installation:**
-1.  **Clone the repository:**
-    ```bash
-    git clone [https://github.com/your-username/ImpactIQ.git](https://github.com/your-username/ImpactIQ.git) # Replace with your repo URL
-    cd ImpactIQ
-    ```
-2.  **Create and activate a conda environment (Recommended):**
-    ```bash
-    conda create -n impactiq python=3.9 -y
-    conda activate impactiq
-    ```
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-    *(Note: Ensure `requirements.txt` includes all necessary packages: pandas, numpy, scikit-learn, econml, xgboost, matplotlib, seaborn, streamlit, kafka-python, etc.)*
+Unlike traditional machine learning models that predict likelihood of an outcome, **uplift models estimate the causal effect** of an intervention on an individual or segment level.
 
-## Usage
-1.  **Prepare Data:** Ensure the Criteo dataset (or your own data formatted similarly) is available and accessible by the scripts (e.g., in a `data/` directory). Update configuration files if necessary to point to the data location.
-2.  **Train Model (Example):**
-    ```bash
-    python src/train_uplift_model.py --config configs/config.yaml
-    ```
-    *(This is a hypothetical script; adapt based on your project structure)*
-3.  **Run the Streamlit Simulator:**
-    ```bash
-    streamlit run src/app.py
-    ```
-    Navigate to the URL provided by Streamlit (usually `http://localhost:8501`) in your web browser. Interact with the UI components to simulate different user profiles and treatments and observe the predicted uplift.
+---
 
-## Contributing
-Contributions are welcome! Please refer to the `CONTRIBUTING.md` file (if available) for guidelines on how to contribute, report issues, or suggest enhancements.
+## 🌳 Uplift Tree-based Algorithms
 
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+In uplift tree-based models, **each decision tree** uses both:
 
-## Acknowledgments
-* Criteo AI Lab for providing the Uplift Prediction Dataset.
-* The developers of EconML, XGBoost, Streamlit, and other open-source libraries used in this project.
+- `treatment_column`: indicates whether an observation received the treatment
+- `response_column`: indicates whether an observation responded (e.g. converted, clicked)
+
+This allows a **single tree** to model both treatment and control groups **jointly**, instead of building separate trees per group.
+
+The algorithm searches for splits that **maximize the divergence** in outcomes between treatment and control subgroups, rather than optimizing metrics like Gini impurity or squared error.
+
+---
+
+## Uplift Metrics
+
+The **splitting criteria** in uplift trees rely on a configurable `uplift_metric`, which measures how different the treatment and control distributions are after a potential split.
+
+### Supported Metrics
+
+---
+
+#### **1. Kullback-Leibler Divergence** (`uplift_metric = "KL"`)
+
+An asymmetric divergence measure that tends toward infinity when probabilities include zeros.
+
+```math
+KL(P, Q) = \sum_{i=0}^{N} p_i \log \frac{p_i}{q_i}
+```
+
+- Used in information theory
+- Sensitive to zero probabilities
+
+---
+
+#### **2. Squared Euclidean Distance** (`uplift_metric = "euclidean"`)
+
+A symmetric and stable distance metric that does not diverge to infinity.
+
+```math
+E(P, Q) = \sum_{i=0}^{N} (p_i - q_i)^2
+```
+
+- Numerically stable
+- Common in clustering and distance-based models
+
+---
+
+#### **3. Chi-Squared Divergence** (`uplift_metric = "chi_squared"`)
+
+An asymmetric measure normalized by the control group distribution.
+
+```math
+\chi^2(P, Q) = \sum_{i=0}^{N} \frac{(p_i - q_i)^2}{q_i}
+```
+
+- Useful for evaluating statistical independence
+- May also diverge when control group has zeros
+
+---
+
+**Where:**
+
+- `P`: treatment group distribution  
+- `Q`: control group distribution
+
+Each split's value in a node is computed as:
+
+```math
+\text{split\_score} = \text{metric}(P, Q) + \text{metric}(1 - P, 1 - Q)
+```
+
+The final **split gain** is normalized using:
+
+- Gini impurity for `euclidean` or `chi_squared`
+- Entropy for `KL`
+
+---
+
+## 🌿 Uplift Prediction: Tree Leaves
+
+Each **leaf** in an uplift tree contains two conditional probabilities:
+
+- `TP_l`: treatment prediction (likelihood of response if treated)
+- `CP_l`: control prediction (likelihood of response if not treated)
+
+Computed as:
+
+```math
+TP_l = \frac{TY1_l + 1}{T_l + 2}
+```
+
+```math
+CP_l = \frac{CY1_l + 1}{C_l + 2}
+```
+
+**Where:**
+
+- `l`: current leaf
+- `T_l`: number of treatment group samples in leaf  
+- `C_l`: number of control group samples in leaf  
+- `TY1_l`: treatment group responses (treatment = 1, response = 1)  
+- `CY1_l`: control group responses (treatment = 0, response = 1)
+
+The **uplift score** for a leaf is:
+
+```math
+uplift\_score_l = TP_l - CP_l
+```
+
+A **positive uplift score** indicates the treatment likely caused a higher response rate.  
+A **negative score** means the control group had a higher response rate, implying the treatment may have had a negative impact.
+
+---
+
+## 🧠 Final Prediction
+
+As in standard decision forest models, the final prediction is the **average uplift score** across all trees in the ensemble.
+
+---
+
+## 🧪 Output Columns (on Prediction)
+
+When calling the `predict()` method on test data, the output includes:
+
+- **`uplift_predict`**: uplift score (i.e. difference between predicted probabilities)
+- **`p_y1_with_treatment`**: probability of response if treated
+- **`p_y1_without_treatment`**: probability of response if not treated
+
+```math
+uplift\_predict = p\_y1\_with\_treatment - p\_y1\_without\_treatment
+```
+
+---
+
+Let me know if you'd like this formatted as a styled Notion page with toggle sections or table formatting too!
