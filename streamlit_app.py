@@ -33,7 +33,7 @@ def train_model():
             st.success("✅ Dataset downloaded successfully!")
 
         # Drop columns
-        data = data.sample(n=1000000, random_state=42)
+        data = data.sample(n=100000, random_state=42)
         data = data.drop(columns=["visit"], errors="ignore")
 
         # Drop missing rows (or fillna if you prefer)
