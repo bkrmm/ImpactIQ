@@ -321,11 +321,10 @@ if auto_update or run_analysis_button:
                 import traceback
                 st.error(f"Traceback: {traceback.format_exc()}")
 
-
         except Exception as e:
             st.error(f"An error occurred during prediction or scaling: {e}")
             import traceback
-            st.error(f"Traceback: {traceback.format_exc()")
+            st.error(f"Traceback: {traceback.format_exc()}")
 else:
     if not auto_update:
          st.info("Realtime updates are disabled. Configure features and click 'Run Analysis' in the sidebar.")
