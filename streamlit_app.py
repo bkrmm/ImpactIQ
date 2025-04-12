@@ -6,6 +6,8 @@ import numpy as np
 import xgboost as xgb
 import shap
 import matplotlib.pyplot as plt
+import requests
+from io import BytesIO
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
@@ -17,9 +19,19 @@ st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
 @st.cache_resource
 def train_model():
     try:
-        st.info("Loading & training model on sample...")
-        data = pd.read_csv(r"B:\Updated-VenV\hackathon-synapses2025\criteo-uplift-v2.1.csv.gz", compression="gzip")
+        st.info("Downloading dataset from Criteo...")
+        # URL of the dataset
+        url = "http://go.criteo.net/criteo-research-uplift-v2.1.csv.gz"
         
+        # Download with progress bar
+        with st.spinner('Downloading dataset...'):
+            response = requests.get(url, stream=True)
+            response.raise_for_status()  # Ensure we got a valid response
+            
+            # Load the data directly from the response content
+            data = pd.read_csv(BytesIO(response.content), compression="gzip")
+            st.success("✅ Dataset downloaded successfully!")
+
         # Drop columns
         data = data.drop(columns=["visit"], errors="ignore")
 
@@ -85,6 +97,9 @@ def train_model():
         
         return model, scaler, explainer, feature_names, feature_ranges
     
+    except requests.RequestException as e:
+        st.error(f"Failed to download dataset: {str(e)}")
+        return None, StandardScaler(), None, [], {}
     except Exception as e:
         st.error(f"Error in model training: {str(e)}")
         return None, StandardScaler(), None, [], {}
