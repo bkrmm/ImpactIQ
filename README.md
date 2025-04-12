@@ -33,15 +33,13 @@ Got it! Below is the content rewritten in a Notion-friendly **Markdown format**,
 
 ---
 
-# 📊 ImpactIQ – Uplift Modeling and Attribution Engine
-
 **ImpactIQ** is an uplift modeling engine designed to quantify the *incremental* impact of a treatment (e.g. marketing campaign, promotion) by comparing outcomes between a **treatment group** and a **control group**.
 
 Unlike traditional machine learning models that predict likelihood of an outcome, **uplift models estimate the causal effect** of an intervention on an individual or segment level.
 
 ---
 
-## 🌳 Uplift Tree-based Algorithms
+## Uplift Tree-based Algorithms
 
 In uplift tree-based models, **each decision tree** uses both:
 
@@ -119,7 +117,7 @@ The final **split gain** is normalized using:
 
 ---
 
-## 🌿 Uplift Prediction: Tree Leaves
+## Uplift Prediction: Tree Leaves
 
 Each **leaf** in an uplift tree contains two conditional probabilities:
 
@@ -155,13 +153,13 @@ A **negative score** means the control group had a higher response rate, implyin
 
 ---
 
-## 🧠 Final Prediction
+## Final Prediction
 
 As in standard decision forest models, the final prediction is the **average uplift score** across all trees in the ensemble.
 
 ---
 
-## 🧪 Output Columns (on Prediction)
+## Output Columns (on Prediction)
 
 When calling the `predict()` method on test data, the output includes:
 
@@ -171,8 +169,4 @@ When calling the `predict()` method on test data, the output includes:
 
 ```math
 uplift\_predict = p\_y1\_with\_treatment - p\_y1\_without\_treatment
-```
 
----
-
-Let me know if you'd like this formatted as a styled Notion page with toggle sections or table formatting too!
