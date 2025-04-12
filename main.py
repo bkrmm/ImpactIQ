@@ -1,205 +1,120 @@
-# main.py
-import logging
-import os
+import streamlit as st
 import pandas as pd
+import numpy as np
 import xgboost as xgb
 import shap
-from fastapi import FastAPI, HTTPException
-import numpy as np
-from pydantic import BaseModel
-from typing import Dict
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+st.set_page_config(layout="wide")
+st.title("ImapactIQ - Customer Acquisition Attribution Analysis")
+st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
 
-# ======================
-# Configuration (Edit these values as needed)
-# ======================
-DATA_PATH = r"B:\Updated-VenV\hackathon-synapses2025\criteo-uplift-v2.1.csv"
-MODEL_PARAMS = {
-    "objective": "binary:logistic",
-    "tree_method": "hist",
-    "n_estimators": 1000,  # Increased for early stopping
-    "max_depth": 4,
-    "learning_rate": 0.05,  # Reduced for better convergence
-    "subsample": 0.8,
-    "colsample_bytree": 0.8,
-    "min_child_weight": 1,
-    "scale_pos_weight": 1,
-    "enable_categorical": False,
-    "eval_metric": ["auc", "logloss"]
-}
-TRAINING_SAMPLE_SIZE = 10000000
-SHAP_BACKGROUND_SIZE = 100000
-# ======================
+@st.cache_resource
+def train_model():
+    st.info("Loading & training model on sample...")
+    data = pd.read_csv(r"-------", compression="gzip")
+    data = data.drop(columns=["visit"], errors="ignore")
+    data = data.dropna()
+    y = data["conversion"]
+    X = data.drop(columns=["conversion"])
 
-class AttributionRequest(BaseModel):
-    features: Dict[str, float]
+    scaler = StandardScaler()
+    X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
 
-def load_data():
-    """Load and preprocess data"""
-    logger.info(f"Loading data from {DATA_PATH}")
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, stratify=y, random_state=42)
+
+    class_weights = {0: 1, 1: 0.1}  
+    model = xgb.XGBClassifier(
+        use_label_encoder=False, 
+        eval_metric="logloss",
+        scale_pos_weight=0.1
+    )
+    model.fit(X_train, y_train)
+
+    explainer = shap.TreeExplainer(model, data=X_train.sample(1000, random_state=1))
+
+    feature_ranges = {}
+    for col in X.columns:
+        min_val = float(X[col].min())
+        max_val = float(X[col].max())
+
+        if min_val == max_val:
+            min_val -= 1
+            max_val += 1
+        feature_ranges[col] = (min_val, max_val)
+        
+    auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
+    st.success(f"✅ Model trained. Test AUC = {auc:.4f}")
+
+    return model, scaler, explainer, X.columns.tolist(), feature_ranges
+
+model, scaler, explainer, feature_names, feature_ranges = train_model()
+
+st.sidebar.header("🔧 Input Features")
+
+if st.sidebar.button("Reset All Features"):
+    for k in st.session_state.keys():
+        if k.startswith("slider_"):
+            del st.session_state[k]
+
+user_input = {}
+for feature in feature_names:
     try:
-        data = pd.read_csv(DATA_PATH)
-        sample = data.sample(n=TRAINING_SAMPLE_SIZE, random_state=42)
-        y = sample["conversion"]
-        X = sample.drop(["conversion", "visit"], axis=1)
+        min_val, max_val = feature_ranges[feature]
+        default = float((min_val + max_val) / 2)
         
-        # Calculate class weight
-        neg_pos_ratio = len(y[y==0]) / len(y[y==1])
-        MODEL_PARAMS["scale_pos_weight"] = neg_pos_ratio
-        
-        # Split the data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
+        min_val = max(-1e6, min_val)
+        max_val = min(1e6, max_val)
+        default = np.clip(default, min_val, max_val)
+
+        user_input[feature] = st.sidebar.slider(
+            feature,
+            min_value=float(min_val),
+            max_value=float(max_val),
+            value=float(default),
+            key=f"slider_{feature}",
+            step=0.01 * (max_val - min_val)  
         )
-        
-        # Scale the features
-        scaler = StandardScaler()
-        X_train = pd.DataFrame(
-            scaler.fit_transform(X_train),
-            columns=X_train.columns
-        )
-        X_test = pd.DataFrame(
-            scaler.transform(X_test),
-            columns=X_test.columns
-        )
-        
-        return X_train, X_test, y_train, y_test, scaler
     except Exception as e:
-        logger.error(f"Data loading failed: {str(e)}")
-        raise
+        st.sidebar.error(f"Error with feature {feature}: {str(e)}")
+        user_input[feature] = 0.0
 
-def initialize_model(X_train, y_train, X_test, y_test):
-    """Train and evaluate XGBoost model with progress tracking"""
-    logger.info("Initializing model")
-    try:
-        # Initialize model without duplicate parameters
-        model = xgb.XGBClassifier(**MODEL_PARAMS)
-        
-        # Train model with evaluation sets
-        model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_train, y_train), (X_test, y_test)],
-            verbose=True
-        )
-        
-        # Get evaluation results
-        results = model.evals_result()
-        
-        # Plot training progress
-        plt.figure(figsize=(12, 6))
-        
-        # AUC plot
-        plt.subplot(1, 2, 1)
-        plt.plot(results['validation_0']['auc'], label='Train')
-        plt.plot(results['validation_1']['auc'], label='Test')
-        plt.title('AUC Progress')
-        plt.ylabel('AUC Score')
-        plt.xlabel('Iteration')
-        plt.legend()
-        
-        # Log Loss plot
-        plt.subplot(1, 2, 2)
-        plt.plot(results['validation_0']['logloss'], label='Train')
-        plt.plot(results['validation_1']['logloss'], label='Test')
-        plt.title('Log Loss Progress')
-        plt.ylabel('Log Loss')
-        plt.xlabel('Iteration')
-        plt.legend()
-        
-        plt.tight_layout()
-        plt.savefig('training_progress.png')
-        
-        # Final evaluation
-        y_pred = model.predict_proba(X_test)[:, 1]
-        auc = roc_auc_score(y_test, y_pred)
-        logger.info(f"Final Model AUC-ROC on test set: {auc:.4f}")
-        
-        return model
-    except Exception as e:
-        logger.error(f"Model initialization failed: {str(e)}")
-        raise
+st.sidebar.markdown("---")
+auto_update = st.sidebar.checkbox("Enable realtime updates", value=True)
 
-def initialize_shap(model, X):
-    """Create SHAP explainer with visualization"""
-    logger.info("Initializing SHAP explainer")
-    try:
-        background = X.sample(n=SHAP_BACKGROUND_SIZE, random_state=42)
-        explainer = shap.TreeExplainer(
-            model,
-            data=background,
-            feature_perturbation="interventional"
-        )
-        
-        # Generate and save SHAP summary plot
-        shap_values = explainer.shap_values(X.sample(10000))
-        plt.figure(figsize=(10, 6))
-        shap.summary_plot(shap_values, X.sample(10000), plot_type="bar")
-        plt.savefig('shap_summary.png')
-        logger.info("Saved SHAP summary plot to shap_summary.png")
-        
-        return explainer
-    except Exception as e:
-        logger.error(f"SHAP initialization failed: {str(e)}")
-        raise
+input_df = pd.DataFrame([user_input])
+input_scaled = pd.DataFrame(scaler.transform(input_df), columns=feature_names)
 
-# Initialize application components
-try:
-    # Load data and initialize model
-    X_train, X_test, y_train, y_test, scaler = load_data()
-    model = initialize_model(X_train, y_train, X_test, y_test)
-    explainer = initialize_shap(model, X_train)
-    
-    # Store scaler for preprocessing new data
-    app = FastAPI(title="Conversion Attribution Service")
-    app.state.scaler = scaler
-    logger.info("Service initialization complete")
+pred_prob = model.predict_proba(input_scaled)[0, 1]
+st.subheader("🎯 Predicted Conversion Probability")
+col1, col2 = st.columns([1, 2])
+with col1:
+    st.metric(
+        label="Conversion Probability",
+        value=f"{pred_prob:.4f}",
+        delta=f"{pred_prob - 0.0025:.4f}",
+        delta_color="inverse"
+    )
 
-except Exception as e:
-    logger.critical(f"Failed to initialize service: {str(e)}")
-    raise
+st.subheader("📊 Feature Attribution (SHAP Values)")
+shap_values = explainer.shap_values(input_scaled)
 
-@app.post("/attribution", response_model=Dict[str, float])
-async def get_attribution(request: AttributionRequest):
-    """Calculate feature attributions for conversion prediction"""
-    try:
-        # Convert request to DataFrame and scale features
-        input_features = pd.DataFrame([request.features])
-        input_features = pd.DataFrame(
-            app.state.scaler.transform(input_features),
-            columns=input_features.columns
-        )
-        
-        # Validate features
-        missing = set(input_features.columns) - set(model.feature_names_in_)
-        if missing:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid features: {', '.join(missing)}"
-            )
+shap_df = pd.DataFrame({
+    "Feature": feature_names,
+    "SHAP Value": shap_values[0]
+}).sort_values("SHAP Value", key=abs, ascending=False)
 
-        # Calculate SHAP values
-        shap_values = explainer.shap_values(input_features)
-        
-        return {
-            feature: float(value)
-            for feature, value in zip(input_features.columns, shap_values[0])
-        }
-        
-    except Exception as e:
-        logger.error(f"Attribution failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+st.dataframe(shap_df.style.background_gradient(cmap="coolwarm", subset=["SHAP Value"]), use_container_width=True)
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+st.subheader("🌐 Global Feature Importance (SHAP Summary)")
+background_data = explainer.data if hasattr(explainer, "data") else None
+
+if background_data is not None:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    shap.summary_plot(explainer.shap_values(background_data), background_data, plot_type="bar", show=False)
+    st.pyplot(fig)
+else:
+    st.warning("Global SHAP summary not available.")
