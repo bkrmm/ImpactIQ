@@ -1,5 +1,4 @@
-# ImpactIQ - Uplift Attribution Engine
-                                    ~*Measuring True Market Impact: Quantifying the Causal Uplift of Interventions.*
+# ImpactIQ - Uplift Attribution Engine ~*Measuring True Market Impact: Quantifying the Causal Uplift of Interventions.*
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Problem Statement
