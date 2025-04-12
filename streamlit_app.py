@@ -1,3 +1,5 @@
+# streamlit_app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -15,37 +17,52 @@ st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
 @st.cache_resource
 def train_model():
     st.info("Loading & training model on sample...")
-    data = pd.read_csv(r"-------", compression="gzip")
+    data = pd.read_csv(r"B:\Updated-VenV\hackathon-synapses2025\criteo-uplift-v2.1.csv.gz", compression="gzip")
+
+    # Drop columns
     data = data.drop(columns=["visit"], errors="ignore")
+
+    # Drop missing rows (or fillna if you prefer)
     data = data.dropna()
+
+    # Limit size for speed
+    #data = data.sample(n=1000000, random_state=42)
+
+    # Split features and label
     y = data["conversion"]
     X = data.drop(columns=["conversion"])
 
+    # Scale features
     scaler = StandardScaler()
     X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
 
+    # Split
     X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, stratify=y, random_state=42)
 
-    class_weights = {0: 1, 1: 0.1}  
+    # Train model with class weights to target lower probabilities
+    class_weights = {0: 1, 1: 0.1}  # Reduce weight of positive class
     model = xgb.XGBClassifier(
         use_label_encoder=False, 
         eval_metric="logloss",
-        scale_pos_weight=0.1
+        scale_pos_weight=0.1  # Additional downweighting of positive class
     )
     model.fit(X_train, y_train)
 
+    # SHAP explainer
     explainer = shap.TreeExplainer(model, data=X_train.sample(1000, random_state=1))
 
+    # Calculate feature ranges with safety checks
     feature_ranges = {}
     for col in X.columns:
         min_val = float(X[col].min())
         max_val = float(X[col].max())
-
+        # Ensure valid range
         if min_val == max_val:
             min_val -= 1
             max_val += 1
         feature_ranges[col] = (min_val, max_val)
-        
+
+    # AUC
     auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
     st.success(f"✅ Model trained. Test AUC = {auc:.4f}")
 
@@ -53,8 +70,12 @@ def train_model():
 
 model, scaler, explainer, feature_names, feature_ranges = train_model()
 
+# -------------------------------
+# User Input for Attribution
+# -------------------------------
 st.sidebar.header("🔧 Input Features")
 
+# Add reset button
 if st.sidebar.button("Reset All Features"):
     for k in st.session_state.keys():
         if k.startswith("slider_"):
@@ -66,6 +87,7 @@ for feature in feature_names:
         min_val, max_val = feature_ranges[feature]
         default = float((min_val + max_val) / 2)
         
+        # Ensure values are within reasonable bounds
         min_val = max(-1e6, min_val)
         max_val = min(1e6, max_val)
         default = np.clip(default, min_val, max_val)
@@ -76,18 +98,22 @@ for feature in feature_names:
             max_value=float(max_val),
             value=float(default),
             key=f"slider_{feature}",
-            step=0.01 * (max_val - min_val)  
+            step=0.01 * (max_val - min_val)  # Add appropriate step size
         )
     except Exception as e:
         st.sidebar.error(f"Error with feature {feature}: {str(e)}")
         user_input[feature] = 0.0
 
+# Enable realtime updates
 st.sidebar.markdown("---")
 auto_update = st.sidebar.checkbox("Enable realtime updates", value=True)
 
 input_df = pd.DataFrame([user_input])
 input_scaled = pd.DataFrame(scaler.transform(input_df), columns=feature_names)
 
+# -------------------------------
+# Prediction
+# -------------------------------
 pred_prob = model.predict_proba(input_scaled)[0, 1]
 st.subheader("🎯 Predicted Conversion Probability")
 col1, col2 = st.columns([1, 2])
@@ -99,6 +125,9 @@ with col1:
         delta_color="inverse"
     )
 
+# -------------------------------
+# SHAP Attribution
+# -------------------------------
 st.subheader("📊 Feature Attribution (SHAP Values)")
 shap_values = explainer.shap_values(input_scaled)
 
@@ -109,6 +138,9 @@ shap_df = pd.DataFrame({
 
 st.dataframe(shap_df.style.background_gradient(cmap="coolwarm", subset=["SHAP Value"]), use_container_width=True)
 
+# -------------------------------
+# Global SHAP Summary Plot
+# -------------------------------
 st.subheader("🌐 Global Feature Importance (SHAP Summary)")
 background_data = explainer.data if hasattr(explainer, "data") else None
 
