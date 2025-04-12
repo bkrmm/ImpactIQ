@@ -170,3 +170,5 @@ When calling the `predict()` method on test data, the output includes:
 ```math
 uplift\_predict = p\_y1\_with\_treatment - p\_y1\_without\_treatment
 
+![training_progress](https://github.com/user-attachments/assets/71d33c17-beb7-4c29-b7cf-9ccc50589187)
+![image (1)](https://github.com/user-attachments/assets/7f3bd719-8d33-4675-8ecb-8c3affa33622)
