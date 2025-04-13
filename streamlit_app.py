@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
 
 st.set_page_config(layout="wide")
-st.title("ImpactIQ - Customer Acquisition Attribution Analysis")
+st.title("ImapactIQ - Customer Acquisition Attribution Analysis")
 st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
 
 @st.cache_resource
@@ -73,13 +73,25 @@ def train_model():
                     st.error(f"Failed to download dataset: {str(download_error)}")
                     # Try to use a small sample dataset as fallback
                     st.warning("Using a small synthetic dataset as fallback...")
-                    # Create a small synthetic dataset
+                    # Create a small synthetic dataset with all columns from the Criteo dataset
+                    # Using fewer rows (500) but including all feature columns (f0-f11)
+                    n_samples = 50000  # Reduced number of rows
                     data = pd.DataFrame({
-                        'f0': np.random.normal(0, 1, 1000),
-                        'f1': np.random.normal(0, 1, 1000),
-                        'f2': np.random.normal(0, 1, 1000),
-                        'treatment': np.random.randint(0, 2, 1000),
-                        'conversion': np.random.randint(0, 2, 1000),
+                        'f0': np.random.normal(0, 1, n_samples),
+                        'f1': np.random.normal(0, 1, n_samples),
+                        'f2': np.random.normal(0, 1, n_samples),
+                        'f3': np.random.normal(0, 1, n_samples),
+                        'f4': np.random.normal(0, 1, n_samples),
+                        'f5': np.random.normal(0, 1, n_samples),
+                        'f6': np.random.normal(0, 1, n_samples),
+                        'f7': np.random.normal(0, 1, n_samples),
+                        'f8': np.random.normal(0, 1, n_samples),
+                        'f9': np.random.normal(0, 1, n_samples),
+                        'f10': np.random.normal(0, 1, n_samples),
+                        'f11': np.random.normal(0, 1, n_samples),
+                        'treatment': np.random.randint(0, 2, n_samples),
+                        'visit': np.random.randint(0, 2, n_samples),  # Adding visit column
+                        'conversion': np.random.randint(0, 2, n_samples),
                     })
 
         # Drop columns
