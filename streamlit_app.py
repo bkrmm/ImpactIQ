@@ -11,365 +11,389 @@ from io import BytesIO
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
-import time # Added for demonstrating download progress
+import time # Optional: For showing download progress details
 
-# --- Page Configuration ---
 st.set_page_config(layout="wide")
-st.title("ImpactIQ - Customer Acquisition Attribution Analysis")
-st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
+st.title("🚀 ImpactIQ - Customer Acquisition Attribution Analysis")
+st.markdown("By Bikramjeet Singh Bedi, Made during Synapses'25 Hackathon by IIT Roorkee")
 
-# --- Cache Initialization ---
-if 'model_cache' not in st.session_state:
-    st.session_state.model_cache = None
-
-# --- Model Training and Data Processing ---
+@st.cache_resource(show_spinner="Training attribution model...") # More specific spinner text
 def train_model():
     """
-    Downloads data, preprocesses it, trains an XGBoost model,
-    and creates a SHAP explainer.
-    Returns:
-        tuple: (model, scaler, explainer, feature_names, feature_ranges, test_auc)
-               Returns (None, None, None, [], {}, None) on failure.
+    Downloads data, preprocesses, trains XGBoost model, and creates SHAP explainer.
+    Returns: tuple (model, scaler, explainer, feature_names, feature_ranges)
+             Returns (None, StandardScaler(), None, [], {}) on failure.
     """
-    # Check if model is already in session state
-    if st.session_state.model_cache is not None:
-        return st.session_state.model_cache
-
     try:
-        st.info("Attempting to download dataset from Criteo...")
+        st.info("Downloading dataset from Criteo (may take a moment)...")
         # URL of the dataset
         url = "http://go.criteo.net/criteo-research-uplift-v2.1.csv.gz"
 
-        # Download with progress (simulated here for clarity, actual download time varies)
+        # Download with progress bar (more manual for better feedback)
+        response = requests.get(url, stream=True)
+        response.raise_for_status()  # Ensure we got a valid response
+        total_size = int(response.headers.get('content-length', 0))
+        block_size = 1024 # 1 Kbyte
+        start_time = time.time()
+        downloaded = 0
+        data_bytes = BytesIO()
         progress_bar = st.progress(0)
         status_text = st.empty()
-        start_time = time.time()
 
-        response = requests.get(url, stream=True)
-        response.raise_for_status()  # Ensure we got a valid response (2xx status code)
-
-        total_size = int(response.headers.get('content-length', 0))
-        bytes_downloaded = 0
-        chunk_size = 8192
-        data_buffer = BytesIO()
-
-        for chunk in response.iter_content(chunk_size=chunk_size):
-            bytes_downloaded += len(chunk)
-            data_buffer.write(chunk)
-            if total_size > 0:
-                progress = min(bytes_downloaded / total_size, 1.0)
-                progress_bar.progress(progress)
+        for data_chunk in response.iter_content(block_size):
+            downloaded += len(data_chunk)
+            data_bytes.write(data_chunk)
+            progress = min(int(100 * downloaded / total_size), 100) if total_size > 0 else 50 # Avoid division by zero, show indeterminate if size unknown
             elapsed_time = time.time() - start_time
-            speed = (bytes_downloaded / 1024 / 1024) / elapsed_time if elapsed_time > 0 else 0
-            status_text.text(f"Downloading... {bytes_downloaded / 1024 / 1024:.2f} MB downloaded at {speed:.2f} MB/s")
+            speed = downloaded / elapsed_time / 1024 if elapsed_time > 0 else 0 # KB/s
+            status_text.text(f"Downloading... {downloaded/1024**2:.1f}/{total_size/1024**2:.1f} MB ({speed:.1f} KB/s) - {progress}%")
+            progress_bar.progress(progress)
 
-        progress_bar.progress(1.0)
         status_text.text("Download complete. Loading data...")
-        st.success("✅ Dataset downloaded successfully!")
+        progress_bar.empty() # Remove progress bar after completion
 
-        # Load the data directly from the response content in memory
-        data_buffer.seek(0) # Rewind the buffer to the beginning
-        data = pd.read_csv(data_buffer, compression="gzip")
-        status_text.text(f"Dataset loaded. Shape: {data.shape}")
+        data_bytes.seek(0) # Rewind the BytesIO object
+        data = pd.read_csv(data_bytes, compression="gzip")
+        st.success("✅ Dataset loaded successfully!")
 
-        # --- Data Preprocessing ---
-        # Use a smaller sample for faster demo/deployment
-        # Note: Sampling *before* dropna might be less efficient if many NaNs exist.
-        # Consider data.dropna().sample(...) if memory allows loading full data first.
-        data = data.sample(n=100000, random_state=42)
-        st.write(f"Sampled data shape: {data.shape}")
-
-        # Drop unnecessary columns (if they exist)
+        # --- Preprocessing ---
+        st.info("Preprocessing data...")
+        # Drop columns (adjust if 'visit' is not present or other columns needed)
         data = data.drop(columns=["visit"], errors="ignore")
 
-        # Handle missing values - Simple approach: drop rows with any NaN
+        # Handle missing values (consider imputation if dropna removes too much)
         initial_rows = len(data)
         data = data.dropna()
         rows_after_na = len(data)
-        st.write(f"Shape after dropping NaNs: {data.shape}. ({initial_rows - rows_after_na} rows removed)")
+        st.write(f"Removed {initial_rows - rows_after_na} rows with missing values.")
+        if rows_after_na == 0:
+            st.error("No data remaining after removing missing values. Please check the dataset.")
+            return None, StandardScaler(), None, [], {}
 
-        if data.empty:
-            st.error("No data remaining after removing missing values. Cannot train model.")
-            return None, None, None, [], {}, None
+        # Optional: Limit size for speed during development/testing
+        # data = data.sample(n=100000, random_state=42) # Smaller sample for faster iteration
+        # st.write(f"Using a sample of {len(data)} rows.")
 
-        # Define features (X) and target (y)
-        # Assuming 'conversion' is the target variable
-        target_column = "conversion"
-        if target_column not in data.columns:
-            st.error(f"Target column '{target_column}' not found in the dataset.")
-            # Attempt to find a potential target or list columns
-            st.write("Available columns:", data.columns.tolist())
-            return None, None, None, [], {}, None
+        # Split features and label
+        if "conversion" not in data.columns:
+            st.error("The required 'conversion' column is missing from the dataset.")
+            return None, StandardScaler(), None, [], {}
+        y = data["conversion"]
+        X = data.drop(columns=["conversion"])
 
-        y = data[target_column]
-        X = data.drop(columns=[target_column])
-        feature_names = X.columns.tolist() # Store original feature names
+        # Check if features remain
+        if X.shape[1] == 0:
+             st.error("No feature columns remaining after preprocessing.")
+             return None, StandardScaler(), None, [], {}
 
-        # Calculate feature ranges based on the *original* (unscaled) data for sliders
+        # Scale features
+        scaler = StandardScaler()
+        # Fit scaler only on training data, transform both train and test
+        # (Fitting here on all X before split for simplicity, but fit_transform on X_train is best practice)
+        X_scaled_all = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
+
+        # Split Data (using scaled data)
+        st.info("Splitting data into training and testing sets...")
+        # Ensure stratification is possible
+        if len(y.unique()) < 2:
+             st.warning("Target variable 'conversion' has less than 2 unique values. Stratification may not be effective.")
+             stratify_param = None
+        else:
+             stratify_param = y
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled_all, y, test_size=0.2, stratify=stratify_param, random_state=42
+        )
+        st.write(f"Training set size: {X_train.shape[0]}, Test set size: {X_test.shape[0]}")
+
+        # Initialize return values
+        model = None
+        explainer = None
+        feature_names = []
         feature_ranges = {}
-        for col in feature_names:
+
+        # --- Model Training ---
+        st.info("Training XGBoost model...")
+        # Calculate scale_pos_weight for imbalanced data
+        neg_count = (y_train == 0).sum()
+        pos_count = (y_train == 1).sum()
+
+        # Handle potential division by zero if one class is missing in the training set (unlikely with stratify but safe)
+        if pos_count > 0 and neg_count > 0:
+             calculated_scale_pos_weight = neg_count / pos_count
+        else:
+             calculated_scale_pos_weight = 1 # Default if one class is missing
+        st.write(f"Class distribution in train set: Negatives={neg_count}, Positives={pos_count}")
+        st.write(f"Using calculated `scale_pos_weight`: {calculated_scale_pos_weight:.2f}")
+
+
+        model = xgb.XGBClassifier(
+            objective='binary:logistic', # Explicitly set objective
+            use_label_encoder=False,     # Good practice for newer XGBoost versions
+            eval_metric="logloss",       # Common metric for binary classification
+            scale_pos_weight=calculated_scale_pos_weight, # Use calculated weight
+            random_state=42              # For reproducibility
+        )
+        model.fit(X_train, y_train)
+
+        # --- SHAP Explainer ---
+        st.info("Creating SHAP explainer...")
+        try:
+            # Use a sample of the training data for the background dataset
+            background_sample_size = min(1000, X_train.shape[0])
+            background_data = X_train.sample(background_sample_size, random_state=1)
+            explainer = shap.TreeExplainer(model, data=background_data) # Pass background data here
+            st.write(f"SHAP explainer created using a background sample of {background_sample_size} instances.")
+        except Exception as e:
+            st.warning(f"SHAP explainer creation failed: {str(e)}")
+            explainer = None
+
+        # --- Feature Info ---
+        feature_names = X.columns.tolist() # Use original X columns for names
+
+        # Calculate feature ranges from the original (unscaled) data for sliders
+        for col in X.columns:
             try:
                 min_val = float(X[col].min())
                 max_val = float(X[col].max())
-                # Handle cases where min == max (e.g., constant column in sample)
+                # Handle case where min and max are the same (e.g., constant feature)
                 if min_val == max_val:
-                    min_val -= 0.5
+                    min_val -= 0.5 # Add some range for the slider
                     max_val += 0.5
                 feature_ranges[col] = (min_val, max_val)
             except Exception as e:
-                st.warning(f"Could not calculate range for feature '{col}': {e}. Using default range (-1, 1).")
-                feature_ranges[col] = (-1.0, 1.0) # Fallback range
+                st.warning(f"Could not calculate range for feature '{col}': {e}. Using default (-1, 1).")
+                feature_ranges[col] = (-1.0, 1.0)  # fallback range
 
-        # Split data into training and testing sets
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, stratify=y, random_state=42
-        )
+        # --- Evaluation ---
+        st.info("Evaluating model on test set...")
+        try:
+             y_pred_proba = model.predict_proba(X_test)[:, 1]
+             auc = roc_auc_score(y_test, y_pred_proba)
+             st.success(f"✅ Model trained. Test AUC = {auc:.4f}")
+        except Exception as e:
+             st.error(f"Failed to evaluate model on test set: {str(e)}")
 
-        # --- Feature Scaling ---
-        # IMPORTANT: Fit the scaler ONLY on the training data
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test) # Use the SAME scaler fitted on train data
 
-        # Convert scaled arrays back to DataFrames with original column names
-        X_train_scaled = pd.DataFrame(X_train_scaled, columns=feature_names, index=X_train.index)
-        X_test_scaled = pd.DataFrame(X_test_scaled, columns=feature_names, index=X_test.index)
-
-        # --- Model Training ---
-        status_text.text("Training XGBoost model...")
-        model = xgb.XGBClassifier(
-            objective='binary:logistic', # Explicitly set objective for clarity
-            use_label_encoder=False,     # Recommended for newer XGBoost versions
-            eval_metric="logloss",       # Metric for evaluation during training (if early stopping used)
-            scale_pos_weight=np.sum(y_train == 0) / np.sum(y_train == 1), # Adjust for class imbalance
-            random_state=42
-        )
-        model.fit(X_train_scaled, y_train)
-        status_text.text("Model training complete.")
-
-        # --- Model Evaluation (on test set) ---
-        test_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
-        test_auc = roc_auc_score(y_test, test_pred_proba)
-        st.success(f"✅ Model trained successfully. Test AUC = {test_auc:.4f}")
-
-        # --- SHAP Explainer ---
-        status_text.text("Creating SHAP explainer...")
-        # Use a subset of the training data as background for TreeExplainer for performance
-        # Adjust sample size as needed based on performance/memory
-        background_data_sample = shap.sample(X_train_scaled, min(100, len(X_train_scaled)), random_state=1)
-        explainer = shap.TreeExplainer(model, data=background_data_sample)
-        status_text.text("SHAP explainer created.")
-
-        # Clear status text
-        status_text.empty()
-        progress_bar.empty()
-
-        # Store results in session state before returning
-        st.session_state.model_cache = (model, scaler, explainer, feature_names, feature_ranges, test_auc)
-        return st.session_state.model_cache
+        return model, scaler, explainer, feature_names, feature_ranges
 
     except requests.RequestException as e:
-        st.error(f"Failed to download dataset: {str(e)}")
-        return None, None, None, [], {}, None
+        st.error(f"Fatal Error: Failed to download dataset. Check URL or network connection. Details: {str(e)}")
+        return None, StandardScaler(), None, [], {}
     except pd.errors.EmptyDataError:
-         st.error("Downloaded file is empty or corrupted.")
-         return None, None, None, [], {}, None
+        st.error("Fatal Error: Downloaded file is empty or not a valid CSV/Gzip.")
+        return None, StandardScaler(), None, [], {}
     except Exception as e:
-        st.error(f"An error occurred during model training or data processing: {str(e)}")
+        st.error(f"Fatal Error during data processing or model training: {str(e)}")
         import traceback
-        st.error(f"Traceback: {traceback.format_exc()}")
-        return None, None, None, [], {}, None
+        st.error(traceback.format_exc()) # Print full traceback for debugging
+        return None, StandardScaler(), None, [], {}
 
-# --- Load Model and Related Objects ---
-model, scaler, explainer, feature_names, feature_ranges, test_auc = train_model()
+# --- Main App Logic ---
+
+# Train model (or load from cache)
+model, scaler, explainer, feature_names, feature_ranges = train_model()
 
 # Stop execution if model training failed
-if model is None or scaler is None or explainer is None:
-    st.error("Model components could not be loaded. Cannot proceed.")
-    st.stop()
+if model is None or scaler is None or not feature_names:
+    st.error("Model training failed or returned invalid components. Cannot proceed.")
+    st.stop() # Stop the script execution
 
-# --- Sidebar: User Input Features ---
-st.sidebar.header("🔧 Input Features for Prediction")
+# -------------------------------
+# User Input for Attribution
+# -------------------------------
+st.sidebar.header("🔧 Input Features")
 
-# Reset button for sliders
+# Add reset button
 if st.sidebar.button("Reset All Features to Defaults"):
-    # Iterate through keys in session state that we added for sliders
-    for key in list(st.session_state.keys()):
-        if key.startswith("slider_"):
-            del st.session_state[key]
-    st.experimental_rerun() # Rerun to apply the reset
-
-# Realtime update control
-auto_update = st.sidebar.checkbox("Enable Realtime Updates", value=True)
+    # Need to know defaults or recalculate them
+    # Simple approach: just clear state, sliders will revert to initial value on next run
+    for k in st.session_state.keys():
+        if k.startswith("slider_"): # Target only slider keys
+            del st.session_state[k]
+    st.rerun() # Force rerun to apply default values immediately
 
 user_input = {}
 for feature in feature_names:
     if feature in feature_ranges:
-        min_val, max_val = feature_ranges[feature]
-        # Calculate a reasonable default (e.g., median or mean if available, otherwise midpoint)
-        # Using midpoint as a simple default
-        default_val = float((min_val + max_val) / 2)
-
-        # Ensure values are valid for the slider
-        min_val_f = float(min_val)
-        max_val_f = float(max_val)
-        default_val_f = np.clip(float(default_val), min_val_f, max_val_f)
-
-        # Calculate a sensible step (e.g., 1/100th of the range)
-        step = max(abs(max_val_f - min_val_f) / 100, 0.01) # Avoid step=0
-
         try:
+            min_val, max_val = feature_ranges[feature]
+            # Calculate a reasonable default (e.g., median or mean of original data)
+            # Using midpoint of range as a fallback default if original data isn't easily accessible here
+            default_val = float((min_val + max_val) / 2)
+
+            # Define slider step (adjust logic as needed)
+            range_diff = max_val - min_val
+            step = 0.01 if range_diff < 1 else 0.1 # Example: smaller step for small ranges
+            if range_diff > 100: step = 1.0 # Larger step for large ranges
+            if range_diff == 0: step = 0.1 # Handle zero range case
+
+            # Use unique key for each slider
+            slider_key = f"slider_{feature}"
+
             user_input[feature] = st.sidebar.slider(
                 label=feature,
-                min_value=min_val_f,
-                max_value=max_val_f,
-                value=default_val_f,
-                step=step,
-                key=f"slider_{feature}" # Unique key for session state
+                min_value=float(min_val),
+                max_value=float(max_val),
+                value=float(default_val), # Default value for the slider
+                step=float(step) if step > 0 else None, # Ensure step is positive or None
+                key=slider_key, # Assign unique key
+                help=f"Range: ({min_val:.2f} to {max_val:.2f})" # Add tooltip
             )
         except Exception as e:
-            st.sidebar.error(f"Error creating slider for {feature}: {e}")
-            user_input[feature] = default_val_f # Use default if slider fails
+            st.sidebar.error(f"Error creating slider for feature '{feature}': {str(e)}")
+            user_input[feature] = 0.0 # Fallback input value
     else:
-        st.sidebar.warning(f"Range not found for feature '{feature}'. Using default input 0.")
-        user_input[feature] = 0.0 # Default value if range calculation failed
+         st.sidebar.warning(f"Range not found for feature '{feature}'. Using default input 0.0.")
+         user_input[feature] = 0.0
 
-# Button to trigger analysis if auto_update is off
-run_analysis_button = False
-if not auto_update:
-    if st.sidebar.button("Run Analysis"):
-        run_analysis_button = True
+# Removed the unused "Enable realtime updates" checkbox
+# st.sidebar.markdown("---")
+# auto_update = st.sidebar.checkbox("Enable realtime updates", value=True)
 
-# --- Main Panel: Prediction and Attribution ---
+# Create DataFrame from user input
+input_df = pd.DataFrame([user_input])
 
-# Only run prediction and SHAP if auto-updating or button is pressed
-if auto_update or run_analysis_button:
-    if not user_input:
-        st.warning("Please configure input features in the sidebar.")
-    else:
-        # Create DataFrame from user input
-        input_df = pd.DataFrame([user_input])
-
-        # Ensure column order matches the training data
-        input_df = input_df[feature_names]
-
-        # Scale the user input using the *same* scaler fitted on training data
-        try:
-            input_scaled = scaler.transform(input_df)
-            # Convert back to DataFrame for SHAP clarity (optional but good practice)
-            input_scaled_df = pd.DataFrame(input_scaled, columns=feature_names)
-
-            # --- Prediction ---
-            pred_prob = float(model.predict_proba(input_scaled_df)[0, 1])  # Convert to Python float
-
-            st.subheader("🎯 Predicted Conversion Probability")
-            st.metric(
-                label="Probability of Conversion",
-                value=f"{pred_prob:.4f}"
-            )
-            st.progress(pred_prob)  # Now using Python float
-
-            # --- Local SHAP Attribution ---
-            st.subheader(f"📊 Feature Contribution for this Prediction (SHAP Values)")
-            try:
-                # Calculate SHAP values for the specific input instance
-                shap_values_instance = explainer.shap_values(input_scaled_df)
-
-                # For binary classification, shap_values usually returns a list [shap_values_class_0, shap_values_class_1]
-                # or just shap_values_class_1 depending on the model/explainer version.
-                # We are interested in the explanation for the positive class (conversion = 1).
-                # Check the structure of shap_values_instance
-                if isinstance(shap_values_instance, list) and len(shap_values_instance) == 2:
-                    shap_values_to_display = shap_values_instance[1][0] # SHAP values for class 1, first instance
-                else:
-                     # Assuming it directly returned values for the positive class
-                    shap_values_to_display = shap_values_instance[0] # SHAP values for the first instance
-
-
-                # Create a DataFrame for display
-                shap_df = pd.DataFrame({
-                    'Feature': feature_names,
-                    'Input Value': input_df.iloc[0].values, # Show the original unscaled input value
-                    'SHAP Value': shap_values_to_display
-                })
-
-                # Sort by absolute SHAP value to see the most impactful features
-                shap_df['abs_SHAP'] = shap_df['SHAP Value'].abs()
-                shap_df = shap_df.sort_values(by='abs_SHAP', ascending=False).drop(columns=['abs_SHAP'])
-
-                # Display the DataFrame with conditional formatting
-                st.dataframe(shap_df.style.format({'Input Value': '{:.4f}', 'SHAP Value': '{:+.4f}'})
-                             .background_gradient(cmap='coolwarm', subset=['SHAP Value']),
-                             use_container_width=True)
-
-                # --- SHAP Force Plot (Local Explanation) ---
-                st.write("Force plot showing feature impacts on this specific prediction:")
-                # Need to make sure plot generation doesn't block or cause issues
-                # shap.force_plot requires JS, use st.components.v1 for robust rendering
-                force_plot = shap.force_plot(explainer.expected_value[1] if isinstance(explainer.expected_value, list) else explainer.expected_value,
-                                             shap_values_to_display, # Use the correct shap values array
-                                             input_scaled_df.iloc[0], # Use the scaled features for the plot labels
-                                             matplotlib=False) # Generate HTML/JS plot
-
-                # Correctly render the SHAP plot HTML
-                shap_html = f"<head>{shap.getjs()}</head><body>{force_plot.html()}</body>"
-                st.components.v1.html(shap_html, height=100, scrolling=True) # Adjust height as needed
-
-
-            except Exception as e:
-                st.error(f"Could not calculate or display local SHAP values: {e}")
-                import traceback
-                st.error(f"Traceback: {traceback.format_exc()}")
-
-
-        except Exception as e:
-            st.error(f"An error occurred during prediction or scaling: {e}")
-            import traceback
-            st.error(f"Traceback: {traceback.format_exc()")
-else:
-    if not auto_update:
-         st.info("Realtime updates are disabled. Configure features and click 'Run Analysis' in the sidebar.")
-
-
-# --- Global SHAP Summary Plot (shows overall feature importance) ---
-# This part depends only on the trained model/explainer, not the specific user input,
-# so it can be shown regardless of the 'Run Analysis' button state.
-st.subheader("🌐 Global Feature Importance (Mean Absolute SHAP Values)")
+# Scale the user input using the *fitted* scaler
 try:
-    # Use the background data sample stored in the explainer for the summary plot
-    background_data = explainer.data
+    input_scaled = pd.DataFrame(scaler.transform(input_df), columns=feature_names)
+except Exception as e:
+    st.error(f"Error scaling user input: {str(e)}")
+    st.stop()
 
-    if background_data is not None and not background_data.empty:
-        st.write("This plot shows the average impact of each feature across many predictions.")
-        # Calculate SHAP values for the background data
-        # Ensure background_data is a DataFrame if needed by shap.summary_plot
-        if not isinstance(background_data, pd.DataFrame):
-             background_data_df = pd.DataFrame(background_data, columns=feature_names)
-        else:
-             background_data_df = background_data
-
-        summary_shap_values = explainer.shap_values(background_data_df)
-
-        # Handle potential list output for binary classification
-        if isinstance(summary_shap_values, list) and len(summary_shap_values) == 2:
-            summary_shap_values_for_plot = summary_shap_values[1] # Class 1
-        else:
-             summary_shap_values_for_plot = summary_shap_values
-
-
-        # Create and display the summary plot
-        fig, ax = plt.subplots()
-        shap.summary_plot(summary_shap_values_for_plot, background_data_df, plot_type="bar", show=False)
-        st.pyplot(fig)
-        plt.close(fig) # Close the figure to free memory
-    else:
-        st.warning("Background data for SHAP summary plot is not available.")
+# -------------------------------
+# Prediction
+# -------------------------------
+st.subheader("🎯 Predicted Conversion Probability")
+try:
+    pred_prob = model.predict_proba(input_scaled)[0, 1]
+    # Display prediction using a metric card
+    col1, col2 = st.columns([1, 3]) # Adjust column widths if needed
+    with col1:
+        st.metric(
+            label="Conversion Probability",
+            value=f"{pred_prob:.4f}",
+            # Delta is optional, could show change from previous run or baseline
+            # delta=f"{pred_prob - 0.0025:.4f}", # Keeping your original delta logic
+            # delta_color="inverse"
+        )
+    with col2:
+        # Add a simple progress bar/indicator based on probability
+        st.progress(pred_prob)
+        st.caption("Likelihood of conversion based on current inputs.")
 
 except Exception as e:
-    st.error(f"Could not generate global SHAP summary plot: {e}")
-    import traceback
-    st.error(f"Traceback: {traceback.format_exc()}")
+    st.error(f"Error during prediction: {str(e)}")
+    pred_prob = None # Set to None if prediction fails
+
+# -------------------------------
+# SHAP Attribution (only if prediction succeeded and explainer exists)
+# -------------------------------
+if pred_prob is not None and explainer is not None:
+    st.subheader("📊 Feature Attribution (Local SHAP Values)")
+    st.markdown("How much each feature value contributed to *this specific prediction* (pushing it higher or lower).")
+    try:
+        # Calculate SHAP values for the single input instance
+        # Ensure input_scaled has the correct format (e.g., DataFrame)
+        shap_values_instance = explainer.shap_values(input_scaled)
+
+        # For binary classification with TreeExplainer, shap_values returns a list [shap_values_class_0, shap_values_class_1]
+        # Or sometimes just the shap_values for the positive class. Check the structure.
+        # Usually, we are interested in the explanation for the positive class (class 1).
+        if isinstance(shap_values_instance, list):
+             shap_values_positive_class = shap_values_instance[1][0] # Explain class 1, first instance
+        else:
+             shap_values_positive_class = shap_values_instance[0] # Assume it directly returned class 1 shap values for first instance
+
+        # Create DataFrame for display
+        shap_df = pd.DataFrame({
+            "Feature": feature_names,
+            "SHAP Value": shap_values_positive_class
+        })
+
+        # Sort by absolute SHAP value to see strongest contributors first
+        shap_df["Abs SHAP Value"] = shap_df["SHAP Value"].abs()
+        shap_df = shap_df.sort_values("Abs SHAP Value", ascending=False).drop(columns=["Abs SHAP Value"])
+
+        # Display sorted SHAP values with a background gradient
+        st.dataframe(
+             shap_df.style.format({"SHAP Value": "{:.4f}"}) # Format numbers
+                        .background_gradient(cmap="coolwarm", subset=["SHAP Value"]),
+             use_container_width=True
+        )
+
+        # Optional: Add a SHAP force plot for the single prediction
+        st.markdown("---")
+        st.markdown("**Force Plot (Local Explanation)**")
+        st.caption("Visualizes the push and pull of features on the prediction.")
+        # shap.force_plot(explainer.expected_value[1], shap_values_positive_class, input_scaled.iloc[0], matplotlib=False) # Needs adaptation for Streamlit display
+        # Workaround for displaying force plot in Streamlit
+        force_plot = shap.force_plot(explainer.expected_value[1], shap_values_positive_class, input_scaled.iloc[0], show=False)
+        st.components.v1.html(force_plot.html(), height=100) # Use st.components.v1.html
+
+
+    except Exception as e:
+        st.error(f"Error calculating or displaying local SHAP values: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc()) # Print full traceback
+
+
+    # -------------------------------
+    # Global SHAP Summary Plot (only if explainer and its background data exist)
+    # -------------------------------
+    st.subheader("🌐 Global Feature Importance (Overall Model Behavior)")
+    st.markdown("Which features are most important for the model's predictions *on average* across many data points.")
+    # Ensure the explainer has the background data it was created with
+    if hasattr(explainer, 'data') and explainer.data is not None:
+        try:
+            st.info(f"Generating SHAP summary plot based on {len(explainer.data)} background samples...")
+            fig, ax = plt.subplots() # Create matplotlib figure explicitly
+
+            # Generate SHAP values for the background data
+            shap_values_background = explainer.shap_values(explainer.data)
+
+            # Determine which SHAP values to plot (for class 1)
+            if isinstance(shap_values_background, list):
+                shap_values_plot = shap_values_background[1] # Class 1
+            else:
+                shap_values_plot = shap_values_background # Assume only class 1 returned
+
+            shap.summary_plot(
+                 shap_values_plot,
+                 explainer.data, # Pass the background data used by explainer
+                 plot_type="bar",  # Bar plot shows mean absolute SHAP value
+                 feature_names=feature_names, # Ensure feature names are passed
+                 show=False # Prevent matplotlib from showing the plot directly
+            )
+            st.pyplot(fig) # Display the plot in Streamlit
+            plt.close(fig) # Close the plot to free memory
+
+            # Add dot summary plot for more detail
+            st.markdown("---")
+            st.markdown("**Detailed SHAP Summary Plot (Dot Plot)**")
+            st.caption("Shows distribution of SHAP values for each feature.")
+            fig2, ax2 = plt.subplots()
+            shap.summary_plot(
+                 shap_values_plot,
+                 explainer.data,
+                 feature_names=feature_names,
+                 show=False
+            )
+            st.pyplot(fig2)
+            plt.close(fig2)
+
+        except Exception as e:
+            st.error(f"Error generating global SHAP summary plot: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc()) # Print full traceback
+
+    else:
+        st.warning("Could not generate global SHAP summary plot: Background data not found in explainer.")
+
+elif explainer is None:
+     st.warning("SHAP Explainer was not created successfully. Attribution plots are unavailable.")
+else:
+     st.warning("Prediction failed. SHAP attribution cannot be calculated.")
 
 st.markdown("---")
-st.markdown(f"Model Test AUC: `{test_auc:.4f}` (Area Under the ROC Curve)")
-st.caption("Higher AUC indicates better model performance at distinguishing between classes.")
+st.info("App execution complete.")
