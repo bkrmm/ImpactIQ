@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
 
 st.set_page_config(layout="wide")
-st.title("ImapactIQ - Customer Acquisition Attribution Analysis")
+st.title("ImpactIQ - Customer Acquisition Attribution Analysis")
 st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
 
 @st.cache_resource
@@ -35,34 +35,44 @@ def train_model():
                 data = pd.read_csv(local_gz_path, compression="gzip")
                 st.success("✅ Compressed dataset loaded successfully from local file!")
         else:
-            # Fallback to downloading from URL
-            st.info("Local dataset not found. Downloading dataset from Criteo...")
+            # Fallback to downloading a smaller sample of the dataset from URL
+            st.info("Local dataset not found. Downloading a smaller sample of the dataset from Criteo...")
             # URL of the dataset
             url = "http://go.criteo.net/criteo-research-uplift-v2.1.csv.gz"
             
             # Download with progress bar
-            with st.spinner('Downloading dataset...'):
+            with st.spinner('Downloading dataset sample...'):
                 try:
-                    response = requests.get(url, stream=True, timeout=30)
+                    # Set up headers to download only a portion of the file
+                    # This will download approximately 30MB instead of 300MB
+                    headers = {'Range': 'bytes=0-30000000'}
+                    response = requests.get(url, stream=True, timeout=30, headers=headers)
                     response.raise_for_status()  # Ensure we got a valid response
                     
                     # Load the data directly from the response content
+                    # Read only the first chunk of data to create a smaller sample
                     data = pd.read_csv(BytesIO(response.content), compression="gzip")
-                    st.success("✅ Dataset downloaded successfully!")
+                    
+                    # Take a random sample to ensure we have a representative dataset
+                    # This further reduces the size while maintaining data distribution
+                    sample_size = min(100000, len(data))  # Limit to 100k rows max
+                    data = data.sample(n=sample_size, random_state=42)
+                    
+                    st.success(f"✅ Dataset sample downloaded successfully! Sample size: {len(data)} rows")
                     
                     # Save for future use
                     try:
                         if not local_gz_path.parent.exists():
                             local_gz_path.parent.mkdir(parents=True, exist_ok=True)
-                        with open(local_gz_path, 'wb') as f:
-                            f.write(response.content)
-                        st.success("✅ Dataset saved locally for future use!")
+                        # Save the sampled data instead of the full file
+                        data.to_csv(local_gz_path, compression="gzip", index=False)
+                        st.success("✅ Dataset sample saved locally for future use!")
                     except Exception as save_error:
                         st.warning(f"Could not save dataset locally: {str(save_error)}")
                 except Exception as download_error:
                     st.error(f"Failed to download dataset: {str(download_error)}")
                     # Try to use a small sample dataset as fallback
-                    st.warning("Using a small sample dataset as fallback...")
+                    st.warning("Using a small synthetic dataset as fallback...")
                     # Create a small synthetic dataset
                     data = pd.DataFrame({
                         'f0': np.random.normal(0, 1, 1000),
@@ -108,9 +118,17 @@ def train_model():
             )
             model.fit(X_train, y_train)
             
-            # Create explainer safely
+            # Create explainer safely with proper background data
             try:
-                explainer = shap.TreeExplainer(model, data=X_train.sample(min(1000, len(X_train)), random_state=1))
+                # Ensure we have enough background data for SHAP
+                background_sample_size = min(5000, len(X_train))
+                background_data = X_train.sample(background_sample_size, random_state=1)
+                
+                # Create explainer with explicit background data
+                explainer = shap.TreeExplainer(model, data=background_data)
+                
+                # Store background data for global summary plot
+                explainer.background_data = background_data
             except Exception as e:
                 st.warning(f"SHAP explainer creation failed: {str(e)}")
                 explainer = None
@@ -226,11 +244,46 @@ st.dataframe(shap_df.style.background_gradient(cmap="coolwarm", subset=["SHAP Va
 # Global SHAP Summary Plot
 # -------------------------------
 st.subheader("🌐 Global Feature Importance (SHAP Summary)")
-background_data = explainer.data if hasattr(explainer, "data") else None
 
-if background_data is not None:
-    fig, ax = plt.subplots(figsize=(10, 6))
-    shap.summary_plot(explainer.shap_values(background_data), background_data, plot_type="bar", show=False)
-    st.pyplot(fig)
+# Use the background data we explicitly stored in the explainer
+if explainer is not None and hasattr(explainer, "background_data") and explainer.background_data is not None:
+    try:
+        # Create a new figure for the summary plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Calculate SHAP values for background data
+        background_shap_values = explainer.shap_values(explainer.background_data)
+        
+        # Generate the summary plot
+        shap.summary_plot(
+            background_shap_values, 
+            explainer.background_data, 
+            plot_type="bar", 
+            max_display=20,  # Limit to top 20 features for clarity
+            show=False
+        )
+        
+        # Display the plot
+        st.pyplot(fig)
+    except Exception as e:
+        st.warning(f"Error generating SHAP summary plot: {str(e)}")
+        # Fallback to simpler visualization if the summary plot fails
+        try:
+            # Create feature importance from model directly as fallback
+            importance_fig, importance_ax = plt.subplots(figsize=(10, 6))
+            xgb.plot_importance(model, ax=importance_ax, max_num_features=20)
+            importance_ax.set_title("Feature Importance (XGBoost)")
+            st.pyplot(importance_fig)
+        except:
+            st.error("Could not generate feature importance visualization.")
 else:
-    st.warning("Global SHAP summary not available.")
+    st.warning("Global SHAP summary not available. SHAP explainer was not properly initialized.")
+    # Fallback to model's feature importance
+    if model is not None:
+        try:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            xgb.plot_importance(model, ax=ax, max_num_features=20)
+            ax.set_title("Feature Importance (XGBoost)")
+            st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Could not generate feature importance: {str(e)}")
