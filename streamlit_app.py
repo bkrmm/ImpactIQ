@@ -14,8 +14,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
 
 st.set_page_config(layout="wide")
-st.title("ImapactIQ - Customer Acquisition Attribution Analysis")
-st.markdown("By Bikramjeet Singh Bedi, In Synapses'25 Hackathon by IIT Roorkee")
+st.title("ImpactIQ - Customer Acquisition Attribution Analysis")
+st.markdown("By Bikramjeet Singh Bedi, Made during Synapses'25 Hackathon by IIT Roorkee")
 
 @st.cache_resource
 def train_model():
